@@ -1,0 +1,177 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-locust
+spec:
+  selector:
+    matchLabels:
+      app: acme-locust
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: acme-locust
+    spec:
+      terminationGracePeriodSeconds: 5
+      restartPolicy: Always
+      volumes:
+      - name: acme-locustfile-shaped
+        configMap:
+          name: acme-locustfile-shaped
+      containers:
+      - name: main
+        image: docker.io/locustio/locust:2.4.1
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/locust 
+        env:
+        - name: FRONTEND_ADDR
+          value: "shopping:3000"
+        command:
+        - locust
+        args:
+        - -f
+        - shape.py
+        - --headless
+        - --host=http://$(FRONTEND_ADDR)
+        resources:
+          requests:
+            cpu: 300m
+            memory: 180Mi
+          limits:
+            cpu: 2000m
+            memory: 256Mi
+        volumeMounts:
+        - name: acme-locustfile-shaped
+          mountPath: /mnt/locust/
+---
+apiVersion: v1
+data:
+  locustfile.py: "# This program will generate traffic for ACME Fitness Shop App.
+    It simulates both Authenticated and Guest user scenarios. You can run this program
+    either from Command line or from\n# the web based UI. Refer to the \"locust\"
+    documentation for further information. \nfrom time import sleep\nfrom locust import
+    HttpUser, task, SequentialTaskSet, between\nimport random\nimport logging\n\n#
+    List of users (pre-loaded into ACME Fitness shop)\nusers = [\"eric\", \"phoebe\",
+    \"dwight\", \"han\", \"elaine\", \"walter\"]\n\n# GuestUserBrowsing simulates
+    traffic for a Guest User (Not logged in)\nclass UserBrowsing(SequentialTaskSet):\n
+    \   def on_start(self):\n        self.getProducts()\n    def listCatalogItems(self):\n
+    \       products = []\n        response = self.client.get(\"/products\")\n        if
+    response.ok:\n            items = response.json()[\"data\"]\n            for item
+    in items:\n                products.append(item[\"id\"])\n        return products\n
+    \   def getProductDetails(self, id):\n        \"\"\"Get details of a specific
+    product\"\"\"\n        details = {}\n        response = self.client.get(\"/products/\"+id)\n
+    \       if response.ok:\n            details = response.json()[\"data\"]\n            logging.debug(\"getProductDetails:
+    \" + str(details))\n        return details\n    def getProductImages(self,id):\n
+    \       \"\"\"Gets all three image URLs for a product\"\"\"\n        details =
+    self.getProductDetails(id)\n        if details:\n            for x in range(1,
+    4):\n                self.client.get(details[\"imageUrl\"+str(x)])\n    def getProductName(self,
+    id):\n        name = \"\"\n        details = self.getProductDetails(id)\n        if
+    details:\n            name = details[\"name\"]\n        logging.debug(\"NAME:
+    \"+name+ \" for id: \"+id)\n        return name\n\n    @task\n    def getProducts(self):\n
+    \       logging.debug(\"User - Get Products\")\n        self.client.get(\"/products\")\n
+    \   @task(2)\n    def getProduct(self):\n        \"\"\"Get details of a specific
+    product\"\"\"\n        logging.debug(\"User - Get a product\")\n        products
+    = self.listCatalogItems()\n        id = random.choice(products)\n        response
+    = self.client.get(\"/products/\"+ id)\n        if response.ok:\n            product
+    = response.json()\n            logging.debug(\"Product info - \" +  str(product))\n
+    \   @task\n    def getImages(self):\n        \"\"\"Get images of a random product\"\"\"\n
+    \       logging.debug(\"User - Get images of random product\")\n        products
+    = self.listCatalogItems()\n        id = random.choice(products)\n        self.getProductImages(id)\n
+    \   @task(2)\n    def index(self):\n        self.client.get(\"/\")\n\n# AuthUserBrowsing
+    simulates traffic for Authenticated Users (Logged in)\nclass AuthUserBrowsing(UserBrowsing):\n
+    \   \"\"\"\n    AuthUserBrowsing extends the base UserBrowsing class as an authenticated
+    user \n    interacting with the cart and making orders\n    \"\"\"\n    Order_Info
+    = { \"userid\":\"8888\",\n                \"firstname\":\"Eric\",\n                \"lastname\":
+    \"Cartman\",\n                \"address\":{\n                    \"street\":\"20
+    Riding Lane Av\",\n                    \"city\":\"San Francisco\",\n                    \"zip\":\"10201\",\n
+    \                   \"state\": \"CA\",\n                    \"country\":\"USA\"},\n
+    \               \"email\":\"jblaze@marvel.com\",\n                \"delivery\":\"UPS/FEDEX\",\n
+    \               \"card\":{\n                    \"type\":\"amex/visa/mastercard/bahubali\",\n
+    \                   \"number\":\"349834797981\", \n                    \"expMonth\":\"12\",\n
+    \                   \"expYear\": \"2022\",\n                    \"ccv\":\"123\"\n
+    \               },\n                \"cart\":[\n                    {\"id\":\"1234\",
+    \"description\":\"redpants\", \"quantity\":\"1\", \"price\":\"4\"},\n                    {\"id\":\"5678\",
+    \"description\":\"bluepants\", \"quantity\":\"1\", \"price\":\"4\"}\n                ],\n
+    \               \"total\":\"100\"}\n\n    def on_start(self):\n        self.login()\n
+    \   def removeProductFromCart(self, userid, productid):\n        \"\"\"Removes
+    a specific product from the cart by setting the quantity of the product to 0\"\"\"\n
+    \       response = self.client.post(\"/cart/item/modify/\"+userid, json={\"itemid\":
+    productid, \"quantity\": 0})\n        if response.ok:\n            logging.debug(\"Auth
+    User - Removed item: \"+productid+\" for user: \"+userid)\n        else:\n            logging.warning(\"failed
+    to remove cart entry. item: \"+productid+\" for user: \"+userid)\n\n    @task\n
+    \   def login(self):\n        \"\"\"Login a random user\"\"\"\n        user =
+    random.choice(users)\n        logging.debug(\"Auth User - Login user \" + user)\n
+    \       response = self.client.post(\"/login/\", json={\"username\": user, \"password\":\"vmware1!\"})\n
+    \       if response.ok:\n            body = response.json()\n            self.user.userid
+    = body[\"token\"]\n    @task(2)\n    def addToCart(self):\n        \"\"\"Randomly
+    adds 1 or 2 of a random product to the cart\"\"\"\n        products = self.listCatalogItems()\n
+    \       productid = random.choice(products)\n        if not self.user.userid:\n
+    \           logging.warning(\"Not logged in, skipping 'Add to Cart'\")\n            return\n
+    \       logging.debug(\"Add to Cart for user \" + self.user.userid)\n        details
+    = self.getProductDetails(productid)\n        cart = self.client.post(\"/cart/item/add/\"
+    + self.user.userid, json={\n                  \"name\": details[\"name\"],\n                  \"price\":
+    details[\"price\"],\n                  \"shortDescription\": \"Test add to cart\",\n
+    \                 \"quantity\": random.randint(1,2),\n                  \"itemid\":
+    productid\n                })\n    @task\n    def removeFromCart(self):\n        \"\"\"Remove
+    a random product from the cart. Helps prevent the cart from overflowing\"\"\"\n
+    \       products = self.listCatalogItems()\n        productid = random.choice(products)\n
+    \       self.removeProductFromCart(self.user.userid, productid)\n    @task\n    def
+    checkout(self):\n        if not self.user.userid:\n            logging.warning(\"Not
+    logged in, skipping 'Add to Checkout'\")\n            return\n        userCart
+    = self.client.get(\"/cart/items/\" + self.user.userid).json()\n        order =
+    self.client.post(\"/order/add/\"+ self.user.userid, json=self.Order_Info)\nclass
+    UserBehavior(SequentialTaskSet):\n    tasks = [AuthUserBrowsing, UserBrowsing]\nclass
+    WebSiteUser(HttpUser):\n    sleep(3)  # Sleep on start of a user incase the target
+    app isn't completely accessible yet.\n    tasks = [UserBehavior]\n    userid =
+    \"\"\n    wait_time = between(0.5, 3)\n\n"
+  shape.py: |
+    from locust import LoadTestShape
+    from locustfile import WebSiteUser
+    import os
+
+    class StagesShape(LoadTestShape):
+        """
+        A simply load test shape class that has different user and spawn_rate at
+        different stages.
+        Keyword arguments:
+            stages -- A list of dicts, each representing a stage with the following keys:
+                duration -- When this many seconds pass the test is advanced to the next stage
+                users -- Total user count
+                spawn_rate -- Number of users to start/stop per second
+                stop -- A boolean that can stop that test at a specific stage
+            stop_at_end -- Can be set to stop once all stages have run.
+        """
+        shape_runtime = 1800
+        if (os.environ.get('SHAPE_RUNTIME_SECONDS')):
+            shape_runtime = int(os.environ.get('SHAPE_RUNTIME_SECONDS'))
+
+        max_users = 600
+        if (os.environ.get('MAX_USERS')):
+            max_users = int(os.environ.get('MAX_USERS'))
+
+
+        stages = [
+                {"duration": shape_runtime * 1/10, "users": max_users * 1/6, "spawn_rate": 1},
+                {"duration": shape_runtime * 1/5, "users": max_users *1/3, "spawn_rate": 1},
+                {"duration": shape_runtime * 3/10, "users": max_users *1/2, "spawn_rate": 1},
+                {"duration": shape_runtime * 2/5, "users": max_users *2/3, "spawn_rate": 1},
+                {"duration": shape_runtime * 1/2, "users": max_users *1, "spawn_rate": 1},
+                {"duration": shape_runtime * 3/5, "users": max_users *2/3, "spawn_rate": 1},
+                {"duration": shape_runtime * 3/4, "users": max_users *1/2, "spawn_rate": 1},
+                {"duration": shape_runtime * 4/5, "users": max_users *1/3, "spawn_rate": 1},
+                {"duration": shape_runtime * 9/10, "users": max_users *1/6, "spawn_rate": 1},
+                {"duration": shape_runtime + 1, "users": max_users *1/12, "spawn_rate": 1},
+        ]
+
+        def tick(self):
+            run_time = self.get_run_time() % self.shape_runtime
+            for stage in self.stages:
+                if run_time < stage["duration"]:
+                    tick_data = (stage["users"], stage["spawn_rate"])
+                    return tick_data
+            return None
+kind: ConfigMap
+metadata:
+  name: acme-locustfile-shaped
+  namespace: acme
